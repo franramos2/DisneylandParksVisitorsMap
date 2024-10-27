@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Disneyland Parks Visitors Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @font-face {
+            font-family: 'Waltograph';
+            src: url('fonts/waltographUI.ttf') format('truetype');
+        }
+
+        body {
+            background-color: #ffffff;
+            font-family: 'Waltograph', Arial, sans-serif;
+        }
+
+        #map { 
+            height: 600px; 
+            width: 100%; 
+            margin-top: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); 
+        }
+
+        select {
+            margin-top: 5px;
+            padding: 3px;
+            font-size: 14px; 
+            font-family: 'Waltograph', Arial, sans-serif;
+            width: 180px; 
+        }
+         
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: -5px;
+        }
+
+        .header img {
+            height: 50px;
+        }
+
+        .selector-container label {
+            font-family: 'Waltograph', Arial, sans-serif;
+            font-size: 14px;
+            margin-bottom: 5px;
+            color: #333333;
+        }
+
+        .chart-container {
+            position: absolute;
+            width: 300px;
+            height: 200px;
+            display: none;
+            background-color: white;
+            border: 1px solid black;
+            padding: 10px;
+            z-index: 1000;
+            font-family: 'Waltograph', Arial, sans-serif;
+        }
+
+        .chart-container canvas {
+            font-family: 'Waltograph', Arial, sans-serif;
+        }
+        .chart-container p {
+            margin-bottom: -10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- Contenedor para la imagen y el selector -->
+    <div class="header">
+        <img src="image.png" alt="Disney Parks">
+        <div class="selector-container">
+            <label for="branchFilter">Select a Park</label>
+            <select id="branchFilter">
+                <option value="all">All Parks</option>
+                <option value="Disneyland Paris">Disneyland Paris</option>
+                <option value="Disneyland California">Disneyland California</option>
+                <option value="Disneyland HongKong">Disneyland HongKong</option>
+            </select>
+        </div>
+    </div>
+    
+    <div id="map"></div>
+    <div id="chartContainer" class="chart-container">
+        <p>Evolution of visitors</p>
+        <canvas id="chart"></canvas>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var map = L.map('map').setView([20, 0], 2);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 18,
+                attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Crear el gráfico de línea con Chart.js
+            var ctx = document.getElementById('chart').getContext('2d');
+            var chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '',
+                        data: [],
+                        borderColor: 'rgba(255, 0, 0, 1)',
+                        borderWidth: 2,
+                        fill: false,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            position: 'bottom',
+                            ticks: {
+                                callback: function(value) {
+                                    return parseInt(value);
+                                },
+                                font: {
+                                    family: 'Waltograph',
+                                }
+                            }
+                        },
+                        y: {
+                            display: false
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    elements: {
+                        point: {
+                            radius: 0 
+                        }
+                    },
+                    layout: {
+                        padding: 20
+                    }
+                }
+            });
+
+            // Función para actualizar el gráfico con nuevos datos
+            function updateChart(years, counts) {
+                chart.data.labels = years;
+                chart.data.datasets[0].data = counts;
+                chart.update();
+            }
+
+            fetch('DisneylandsReviews.csv')
+                .then(response => response.text())
+                .then(csv => {
+                    var lines = csv.split('\n');
+                    var data = {}; // Para almacenar los conteos por ubicación, año y branch
+
+                    for (var i = 1; i < lines.length; i++) {
+                        var columns = lines[i].split(';');
+                        if (columns.length > 7) {
+                            var reviewID = columns[0].trim();  // 'Review_ID'
+                            var year = parseInt(columns[2].trim()); // 'Year'
+                            var latitude = parseFloat(columns[6]); // 'Latitud'
+                            var longitude = parseFloat(columns[7]); // 'Longuitud'
+                            var branch = columns[5].trim();  // 'Branch'
+                            var location = columns[4].trim(); // 'Reviewer_Location'
+
+                            var key = `${latitude},${longitude}`;
+
+                            if (!data[key]) {
+                                data[key] = {
+                                    lat: latitude,
+                                    lon: longitude,
+                                    branches: {},
+                                    yearlyCounts: {}, // Añadimos los conteos por año
+                                    totalReviews: new Set()
+                                };
+                            }
+
+                            // Añadir la revisión al conjunto total de reviews
+                            data[key].totalReviews.add(reviewID);
+
+                            // Añadir el conteo por año
+                            if (!data[key].yearlyCounts[year]) {
+                                data[key].yearlyCounts[year] = 0;
+                            }
+                            data[key].yearlyCounts[year] += 1;
+
+                            // Añadir Review_ID por branch
+                            if (!data[key].branches[branch]) {
+                                data[key].branches[branch] = new Set();
+                            }
+                            data[key].branches[branch].add(reviewID);
+                        }
+                    }
+
+                    var groupedData = Object.values(data);
+
+                    // Función para actualizar el mapa según el branch seleccionado
+                    document.getElementById('branchFilter').onchange = function() {
+                        var selectedBranch = this.value;
+
+                        map.eachLayer(function(layer) {
+                            if (layer instanceof L.Circle) {
+                                map.removeLayer(layer);
+                            }
+                        });
+
+                        groupedData.forEach(function(item) {
+                            var reviewCount = selectedBranch === 'all'
+                                ? item.totalReviews.size
+                                : (item.branches[selectedBranch] ? item.branches[selectedBranch].size : 0);
+
+                            if (reviewCount > 0) {
+                                var circle = L.circle([item.lat, item.lon], {
+                                    color: 'black',
+                                    weight: 0.3,
+                                    fillColor: getColor(reviewCount),
+                                    fillOpacity: 0.6,
+                                    radius: 0 // Inicia con radio 0 para animar
+                                }).addTo(map);
+
+                                // Animación para hacer crecer el círculo
+                                setTimeout(function() {
+                                    circle.setRadius(getRadius(reviewCount));
+                                }, 100);
+
+                                circle.on('mouseover', function(e) {
+                                    // Obtener los datos de tendencia por año
+                                    var years = Object.keys(item.yearlyCounts).map(Number);
+                                    var counts = Object.values(item.yearlyCounts);
+
+                                    updateChart(years, counts);
+
+                                    var chartContainer = document.getElementById('chartContainer');
+                                    chartContainer.style.display = 'block';
+                                    chartContainer.style.top = `${e.originalEvent.pageY + 10}px`;
+                                    chartContainer.style.left = `${e.originalEvent.pageX + 10}px`;
+                                });
+
+                                circle.on('mouseout', function() {
+                                    document.getElementById('chartContainer').style.display = 'none';
+                                });
+                            }
+                        });
+                    };
+
+                    document.getElementById('branchFilter').dispatchEvent(new Event('change'));
+                });
+
+            function getColor(count) {
+                // Gradiente más suave de rojo
+                var intensity = Math.min(1, count / 100);
+                return `rgba(255, 0, 0, ${intensity})`;
+            }
+
+            function getRadius(count) {
+                return Math.sqrt(count) * 14000;
+            }
+        });
+    </script>
+</body>
+</html>
